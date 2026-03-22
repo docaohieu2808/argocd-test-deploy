@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: express-web
+  labels:
+    app: express-web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: express-web
+  template:
+    metadata:
+      labels:
+        app: express-web
+    spec:
+      containers:
+      - name: web
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          requests:
+            memory: 64Mi
+            cpu: 50m
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: express-web
+spec:
+  selector:
+    app: express-web
+  ports:
+  - port: 80
+    targetPort: 80
+  type: ClusterIP
