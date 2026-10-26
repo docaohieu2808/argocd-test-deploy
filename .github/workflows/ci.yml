@@ -86,7 +86,7 @@ jobs:
           version: v0.33.0
           cluster_name: argocd-test-deploy
       - name: Install Argo CD
-        run: ci/install-argocd.sh "$ARGOCD_VERSION"
+        run: ci/install-argocd.sh "$ARGOCD_VERSION" argocd-test-deploy
       - name: Apply the Application at the commit under test
         env:
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
