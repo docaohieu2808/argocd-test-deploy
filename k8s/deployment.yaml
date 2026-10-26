@@ -1,37 +1,55 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: express-web
+  name: demo-web
   labels:
-    app: express-web
+    app: demo-web
 spec:
   replicas: 3
   selector:
     matchLabels:
-      app: express-web
+      app: demo-web
   template:
     metadata:
       labels:
-        app: express-web
+        app: demo-web
     spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       containers:
-      - name: web
-        image: nginx:alpine
-        ports:
-        - containerPort: 80
-        resources:
-          requests:
-            memory: 64Mi
-            cpu: 50m
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: express-web
-spec:
-  selector:
-    app: express-web
-  ports:
-  - port: 80
-    targetPort: 80
-  type: ClusterIP
+        - name: web
+          # Unprivileged build: runs as uid 101 and listens on 8080, so it passes the restricted Pod Security profile.
+          image: nginxinc/nginx-unprivileged:1.30.6-alpine
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}

@@ -1,0 +1,105 @@
+# Proves the sync target works for real, on every push and once a week:
+# - lint: actionlint, shellcheck, yamllint, pinned-action check, kubeconform -strict;
+# - sync: kind cluster + real Argo CD, apply argocd-application.yaml pointing at THIS repository at the commit under
+#   test, wait for Synced+Healthy, check the Service answers and that selfHeal reverts manual drift.
+# The sync job runs on the pinned Argo CD release and on the newest upstream release.
+name: ci
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "47 2 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  ARGOCD_PINNED: v3.5.6
+  KUBECONFORM_VERSION: v0.8.0
+  ACTIONLINT_VERSION: 1.7.12
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: actionlint
+        run: |
+          bash <(curl -sSfL "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash") "$ACTIONLINT_VERSION"
+          ./actionlint -color
+      - name: shellcheck
+        run: shellcheck ci/*.sh
+      - name: yamllint
+        run: pipx run --spec yamllint==1.38.0 yamllint -c .yamllint.yml .
+      - name: Every action is pinned to a commit SHA that exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # An annotated tag object's SHA looks like a commit SHA but fails when a job runs, so ask the API.
+          refs=$(grep -rhE '^[[:space:]]*(- )?uses: *[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@' .github \
+            | sed -E 's/^[[:space:]]*(- )?uses: *//; s/[[:space:]].*$//' | sort -u)
+          status=0
+          while IFS=@ read -r ref sha; do
+            repo=$(echo "$ref" | cut -d/ -f1-2)
+            if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then echo "FAIL $ref@$sha is not pinned to a SHA"; status=1
+            elif gh api "repos/$repo/commits/$sha" --jq .sha >/dev/null 2>&1; then echo "ok   $ref@$sha"
+            else echo "FAIL $ref@$sha is not a commit"; status=1; fi
+          done <<< "$refs"
+          exit "$status"
+      - name: kubeconform -strict (Kubernetes 1.37 + Argo CD CRD schemas)
+        run: |
+          curl -sSfLo kc.tgz "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          curl -sSfLo kc.sums "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/CHECKSUMS"
+          grep ' kubeconform-linux-amd64.tar.gz$' kc.sums | sed 's/ kubeconform/  kc/' | sha256sum -c -
+          tar xzf kc.tgz kubeconform
+          ./kubeconform -strict -summary -kubernetes-version 1.37.0 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            k8s argocd-application.yaml
+
+  sync:
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        argocd: [pinned, latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Resolve Argo CD version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ matrix.argocd }}
+        run: |
+          if [ "$CHANNEL" = pinned ]; then v=$ARGOCD_PINNED; else v=$(gh api repos/argoproj/argo-cd/releases/latest --jq .tag_name); fi
+          echo "ARGOCD_VERSION=$v" >> "$GITHUB_ENV"
+          echo "Argo CD $v"
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          version: v0.33.0
+          cluster_name: argocd-test-deploy
+      - name: Install Argo CD
+        run: ci/install-argocd.sh "$ARGOCD_VERSION"
+      - name: Apply the Application at the commit under test
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          yq '.spec.source.repoURL = "https://github.com/" + strenv(REPO) + ".git" | .spec.source.targetRevision = strenv(SHA)' \
+            argocd-application.yaml | kubectl apply -f -
+      - name: Wait for Synced and Healthy
+        run: ci/wait-for-apps.sh 420 argocd-test-deploy
+      - name: Service answers and selfHeal reverts drift
+        run: ci/assert-selfheal-and-rollout.sh
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl -n argocd get applications -o yaml
+          kubectl -n demo get all

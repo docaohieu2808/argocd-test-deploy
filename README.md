@@ -1,59 +1,58 @@
 # argocd-test-deploy
 
-ArgoCD sync target for lab practice. A minimal nginx Deployment (3 replicas) + ClusterIP Service used to demonstrate the ArgoCD commit-to-sync loop.
-
-## Purpose
-
-This repo is the **sync target** when bootstrapping ArgoCD on a local K3s cluster:
+The sync target for the Argo CD lab: a small, hardened nginx Deployment (3 replicas) plus a ClusterIP Service in
+`k8s/`, with a `kustomization.yaml` so Argo CD can override replicas per environment. It exists to practise the
+GitOps loop:
 
 ```
-git commit → GitHub → ArgoCD detects diff → syncs k8s/ → cluster state updated
+git commit -> GitHub -> Argo CD detects the diff -> syncs k8s/ -> cluster matches Git
 ```
-
-Useful for practising:
-- App-of-apps bootstrap (point `argocd-apps` root-app here)
-- Watching automated sync + selfHeal in real time
-- Triggering rollbacks by reverting a commit
 
 ## Files
 
-| File | Description |
+| Path | What it is |
 |---|---|
-| `k8s/deployment.yaml` | `apps/v1` Deployment (nginx:alpine, 3 replicas, resource requests) + ClusterIP Service |
+| `k8s/deployment.yaml` | `demo-web` Deployment: `nginxinc/nginx-unprivileged:1.30.6-alpine`, non-root, read-only root filesystem, probes, requests and limits |
+| `k8s/service.yaml` | ClusterIP Service `demo-web` (port 80 to container port 8080) |
+| `k8s/kustomization.yaml` | Lists the two manifests; enables `kustomize.replicas` overrides from the Application |
+| `argocd-application.yaml` | Standalone Argo CD Application for this repo (automated sync, prune, selfHeal) |
 
-## Quick demo
+## Run it
+
+You need a cluster with Argo CD (`kind create cluster`, or k3s; Argo CD v3.5.x):
 
 ```bash
-# 1. Bootstrap ArgoCD on K3s (see container-orchestration repo)
-# 2. Create an Application pointing to this repo
-kubectl apply -n argocd -f - <<EOF
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: argocd-test-deploy
-  namespace: argocd
-spec:
-  project: default
-  source:
-    repoURL: https://github.com/docaohieu2808/argocd-test-deploy.git
-    targetRevision: HEAD
-    path: k8s
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: default
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-EOF
+kubectl create namespace argocd
+kubectl apply --server-side --force-conflicts -n argocd \
+  -f https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.6/manifests/install.yaml
+kubectl apply -n argocd -f argocd-application.yaml
 
-# 3. Edit replicas in k8s/deployment.yaml, commit + push
-# 4. Watch ArgoCD sync within ~3 minutes (or trigger manually)
-argocd app sync argocd-test-deploy
-argocd app get argocd-test-deploy
+kubectl -n argocd get application argocd-test-deploy        # Synced / Healthy
+kubectl -n demo scale deployment demo-web --replicas=1      # drift: selfHeal puts it back to 3
 ```
 
-## Relationship to other repos
+Then edit `replicas` in `k8s/deployment.yaml`, commit and push: Argo CD picks it up within about 3 minutes (or
+`argocd app sync argocd-test-deploy`). Revert the commit to practise a rollback.
 
-- `argocd-apps` — control plane that can manage this repo via an ApplicationSet or direct Application
-- `container-orchestration` — K3s install scripts to set up the target cluster
+## Part of the app-of-apps
+
+[`argocd-apps`](https://github.com/docaohieu2808/argocd-apps) deploys this repo itself: its matrix ApplicationSet renders
+`test-deploy-staging` (1 replica) and `test-deploy-production` (2 replicas) from `k8s/`, and its PR-preview
+ApplicationSet creates a preview Application for every pull request on this repo that carries the `preview` label.
+Applying that repo's `bootstrap/root-app.yaml` is therefore enough; this repo's own Application is for running it alone.
+
+## What CI checks
+
+`.github/workflows/ci.yml` runs on every push, pull request and weekly (Monday 02:47 UTC):
+
+- `lint`: actionlint, shellcheck, yamllint, every action pinned to an existing commit SHA, `kubeconform -strict` against
+  Kubernetes 1.37 and the Argo CD CRD schemas.
+- `sync` (on the pinned Argo CD v3.5.6 and on the newest upstream release): starts a kind cluster, installs Argo CD,
+  applies `argocd-application.yaml` pointed at this repository at the commit under test, waits until the app is Synced
+  and Healthy, requests the Service from inside the cluster, then scales the Deployment by hand and requires selfHeal
+  to restore 3 replicas.
+
+## Limits
+
+- Pull requests from forks cannot run `sync` (the fork's commit is not fetchable from this repository).
+- It tests Argo CD against a public GitHub repository; private repositories, SSO and multi-cluster are in `argocd-apps`.

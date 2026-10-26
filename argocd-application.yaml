@@ -1,0 +1,22 @@
+# Standalone Application for this repo: `kubectl apply -n argocd -f argocd-application.yaml`.
+# (argocd-apps also deploys it, to staging and production, through its matrix ApplicationSet.)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: argocd-test-deploy
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/docaohieu2808/argocd-test-deploy.git
+    targetRevision: HEAD
+    path: k8s
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
