@@ -52,10 +52,10 @@ jobs:
           exit "$status"
       - name: kubeconform -strict (Kubernetes 1.37 + Argo CD CRD schemas)
         run: |
-          curl -sSfLo kc.tgz "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          curl -sSfLO "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
           curl -sSfLo kc.sums "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/CHECKSUMS"
-          grep ' kubeconform-linux-amd64.tar.gz$' kc.sums | sed 's/ kubeconform/  kc/' | sha256sum -c -
-          tar xzf kc.tgz kubeconform
+          sha256sum -c --ignore-missing kc.sums
+          tar xzf kubeconform-linux-amd64.tar.gz kubeconform
           ./kubeconform -strict -summary -kubernetes-version 1.37.0 \
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
