@@ -1,20 +1,20 @@
 # argocd-test-deploy
 
 The sync target for the Argo CD lab: a small, hardened nginx Deployment (3 replicas) plus a ClusterIP Service in
-`k8s/`, with a `kustomization.yaml` so Argo CD can override replicas per environment. It exists to practise the
-GitOps loop:
+`k8s/base/`, plus Kustomize overlays for staging and production in `k8s/overlays/`. It exists to practise the GitOps loop:
 
 ```
-git commit -> GitHub -> Argo CD detects the diff -> syncs k8s/ -> cluster matches Git
+git commit -> GitHub -> Argo CD detects the diff -> syncs k8s/base -> cluster matches Git
 ```
 
 ## Files
 
 | Path | What it is |
 |---|---|
-| `k8s/deployment.yaml` | `demo-web` Deployment: `nginxinc/nginx-unprivileged:1.30.6-alpine`, non-root, read-only root filesystem, probes, requests and limits |
-| `k8s/service.yaml` | ClusterIP Service `demo-web` (port 80 to container port 8080) |
-| `k8s/kustomization.yaml` | Lists the two manifests; enables `kustomize.replicas` overrides from the Application |
+| `k8s/base/deployment.yaml` | `demo-web` Deployment: `nginxinc/nginx-unprivileged:1.30.6-alpine`, non-root, read-only root filesystem, probes, requests and limits |
+| `k8s/base/service.yaml` | ClusterIP Service `demo-web` (port 80 to container port 8080) |
+| `k8s/base/kustomization.yaml` | Lists the two manifests |
+| `k8s/overlays/staging`, `k8s/overlays/production` | The base with 1 and 2 replicas |
 | `argocd-application.yaml` | Standalone Argo CD Application for this repo (automated sync, prune, selfHeal) |
 
 ## Run it
@@ -31,13 +31,13 @@ kubectl -n argocd get application argocd-test-deploy        # Synced / Healthy
 kubectl -n demo scale deployment demo-web --replicas=1      # drift: selfHeal puts it back to 3
 ```
 
-Then edit `replicas` in `k8s/deployment.yaml`, commit and push: Argo CD picks it up within about 3 minutes (or
+Then edit `replicas` in `k8s/base/deployment.yaml`, commit and push: Argo CD picks it up within about 3 minutes (or
 `argocd app sync argocd-test-deploy`). Revert the commit to practise a rollback.
 
 ## Part of the app-of-apps
 
 [`argocd-apps`](https://github.com/docaohieu2808/argocd-apps) deploys this repo itself: its matrix ApplicationSet renders
-`test-deploy-staging` (1 replica) and `test-deploy-production` (2 replicas) from `k8s/`, and its PR-preview
+`test-deploy-staging` and `test-deploy-production` from the two overlays, and its PR-preview
 ApplicationSet creates a preview Application for every pull request on this repo that carries the `preview` label.
 Applying that repo's `bootstrap/root-app.yaml` is therefore enough; this repo's own Application is for running it alone.
 

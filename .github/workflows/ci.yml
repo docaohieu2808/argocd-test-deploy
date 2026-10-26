@@ -59,7 +59,7 @@ jobs:
           ./kubeconform -strict -summary -kubernetes-version 1.37.0 \
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            k8s argocd-application.yaml
+            k8s/base k8s/overlays argocd-application.yaml
 
   sync:
     needs: lint

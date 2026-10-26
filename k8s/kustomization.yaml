@@ -1,7 +1,0 @@
-# Lets Argo CD apply per-environment overrides (kustomize.replicas) without editing these files;
-# argocd-apps uses that to run this app with 1 replica in staging and 2 in production.
-apiVersion: kustomize.config.k8s.io/v1beta1
-kind: Kustomization
-resources:
-  - deployment.yaml
-  - service.yaml
